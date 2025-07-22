@@ -1,0 +1,37 @@
+[
+  {
+    "source": "Reddit",
+    "timestamp": "2m ago",
+    "content": "New breakthrough in quantum computing achieves 1000 qubit milestone",
+    "url": "https://reddit.com/r/science/quantum",
+    "engagement": 1500
+  },
+  {
+    "source": "GitHub",
+    "timestamp": "5m ago",
+    "content": "New repo starred: openai/gpt-engine - Open source LLM training framework",
+    "url": "https://github.com/openai/gpt-engine",
+    "engagement": 2300
+  },
+  {
+    "source": "Hacker News",
+    "timestamp": "10m ago",
+    "content": "Show HN: Built a RAG-powered code search engine in a weekend",
+    "url": "https://news.ycombinator.com/item?id=123",
+    "engagement": 890
+  },
+  {
+    "source": "Twitter",
+    "timestamp": "15m ago",
+    "content": "Announcing our new AI model that achieves SOTA on multiple benchmarks",
+    "url": "https://twitter.com/ai_lab/status/123",
+    "engagement": 5600
+  },
+  {
+    "source": "Product Hunt",
+    "timestamp": "30m ago",
+    "content": "Launch: AI-powered personal research assistant",
+    "url": "https://producthunt.com/posts/ai-research",
+    "engagement": 450
+  }
+]
