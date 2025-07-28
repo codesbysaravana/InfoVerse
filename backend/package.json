@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "build": "echo Building backend...",
+    "build": "echo Simulating backend build...",
+    "start": "node server.js",
     "db:push": "dotenv -e .env -- drizzle-kit push",
     "db:generate": "dotenv -e .env -- drizzle-kit generate"
   },
