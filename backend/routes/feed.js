@@ -1,126 +1,120 @@
 import express from 'express';
-import fs from 'fs';
-import path from 'path';
+import Feed from '../models/Feed.js';
 
 const router = express.Router();
 
-// Feed cache with TTL
-const feedCache = new Map();
+// In-memory cache with TTL
+const cache = {
+  data: new Map(),
+  set(key, value, ttl) {
+    this.data.set(key, { value, expiry: Date.now() + ttl });
+  },
+  get(key) {
+    const item = this.data.get(key);
+    if (item && item.expiry > Date.now()) {
+      return item.value;
+    }
+    this.data.delete(key);
+    return null;
+  },
+};
+
 const CACHE_TTL = 60 * 1000; // 1 minute
 
-// Error handling middleware
-const asyncHandler = (fn) => (req, res, next) => {
+// Async wrapper to handle errors
+const asyncHandler = fn => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
-};
 
-// Feed filtering and sorting utility
-const filterAndSortFeeds = (feeds, options) => {
-  let filtered = [...feeds];
+// MongoDB query builder
+const buildFeedQuery = ({ sources, timeRange }) => {
+  const query = {};
 
-  // Apply source filter
-  if (options.sources && options.sources.length > 0) {
-    filtered = filtered.filter(feed => 
-      options.sources.includes(feed.source.toLowerCase())
-    );
+  if (sources?.length) {
+    query.source = { $in: sources.map(s => s.toLowerCase()) };
   }
 
-  // Apply time range filter
-  if (options.timeRange) {
-    const now = Date.now();
-    const ranges = {
+  if (timeRange) {
+    const now = new Date();
+    const timeMap = {
       '1h': 60 * 60 * 1000,
       '24h': 24 * 60 * 60 * 1000,
-      '7d': 7 * 24 * 60 * 60 * 1000
+      '7d': 7 * 24 * 60 * 60 * 1000,
     };
-    
-    filtered = filtered.filter(feed => {
-      const feedTime = new Date(feed.timestamp).getTime();
-      return (now - feedTime) <= ranges[options.timeRange];
-    });
+    const range = timeMap[timeRange];
+    if (range) {
+      query.timestamp = { $gte: new Date(now.getTime() - range) };
+    }
   }
 
-  // Apply sorting
-  if (options.sortBy) {
-    filtered.sort((a, b) => {
-      switch (options.sortBy) {
-        case 'engagement':
-          return b.engagement - a.engagement;
-        case 'time':
-          return new Date(b.timestamp) - new Date(a.timestamp);
-        default:
-          return 0;
-      }
-    });
-  }
-
-  return filtered;
+  return query;
 };
 
-// Get feeds with filtering and pagination
+// Sorting logic
+const buildSortOptions = sortBy => {
+  switch (sortBy) {
+    case 'engagement':
+      return { engagement: -1 };
+    case 'time':
+    default:
+      return { timestamp: -1 };
+  }
+};
+
+// Route: GET /feeds
 router.get('/', asyncHandler(async (req, res) => {
   const {
     sources,
     timeRange,
     sortBy = 'time',
     page = 1,
-    limit = 10
+    limit = 20
   } = req.query;
 
-  // Check cache first
-  const cacheKey = JSON.stringify({ sources, timeRange, sortBy, page, limit });
-  const cached = feedCache.get(cacheKey);
-  if (cached && cached.timestamp > Date.now() - CACHE_TTL) {
-    return res.json(cached.data);
-  }
-
-  // Read and process feeds
-  const data = JSON.parse(
-    fs.readFileSync(path.join(process.cwd(), 'data', 'mock_feeds.json'), 'utf-8')
-  );
-
-  // Apply filters and sorting
-  const filtered = filterAndSortFeeds(data, {
-    sources: sources ? sources.split(',') : null,
+  const options = {
+    sources: sources ? sources.split(',') : [],
     timeRange,
-    sortBy
-  });
-
-  // Apply pagination
-  const start = (page - 1) * limit;
-  const end = start + limit;
-  const paginatedFeeds = filtered.slice(start, end);
-
-  const response = {
-    feeds: paginatedFeeds,
-    total: filtered.length,
-    page: Number(page),
-    totalPages: Math.ceil(filtered.length / limit)
+    sortBy,
+    page: parseInt(page),
+    limit: parseInt(limit),
   };
 
-  // Update cache
-  feedCache.set(cacheKey, {
-    data: response,
-    timestamp: Date.now()
-  });
+  const cacheKey = JSON.stringify(options);
+  const cached = cache.get(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+
+  const query = buildFeedQuery(options);
+  const sort = buildSortOptions(options.sortBy);
+
+  const [feeds, total] = await Promise.all([
+    Feed.find(query)
+      .sort(sort)
+      .skip((options.page - 1) * options.limit)
+      .limit(options.limit)
+      .lean(),
+    Feed.countDocuments(query)
+  ]);
+
+  const response = {
+    feeds,
+    pagination: {
+      currentPage: options.page,
+      totalPages: Math.ceil(total / options.limit),
+      totalItems: total
+    }
+  };
+
+  cache.set(cacheKey, response, CACHE_TTL);
 
   res.json(response);
 }));
 
-// Get feeds by source
-router.get('/:source', (req, res) => {
-  try {
-    const { source } = req.params;
-    const data = JSON.parse(
-      fs.readFileSync(path.join(process.cwd(), 'data', 'mock_feeds.json'), 'utf-8')
-    );
-    const filteredData = data.filter(item => 
-      item.source.toLowerCase() === source.toLowerCase()
-    );
-    res.json(filteredData);
-  } catch (error) {
-    console.error('Feed source error:', error);
-    res.status(500).json({ error: 'Failed to fetch source feeds' });
-  }
-});
+// Route: GET /feeds/:source
+router.get('/:source', asyncHandler(async (req, res) => {
+  const { source } = req.params;
+  const feeds = await Feed.find({ source: source.toLowerCase() }).lean();
+  res.json(feeds);
+}));
 
 export default router;

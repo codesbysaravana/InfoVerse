@@ -1,14 +1,13 @@
-import WebSocket from 'ws';
-import { db } from '../drizzle/db.js';
-import { summaries } from '../drizzle/schema.js';
+// ws/websocket.js (or similar)
+
+import WebSocket, { WebSocketServer } from 'ws';
+import { connectToMongo } from '../mongoClient.js';
 
 export function setupWebSocket(server) {
-  const wss = new WebSocket.Server({ server });
-
+  const wss = new WebSocketServer({ server });
   const clients = new Set();
   const feeds = new Map();
 
-  // Broadcast to all clients
   const broadcast = (type, data) => {
     const message = JSON.stringify({ type, data });
     clients.forEach(client => {
@@ -18,14 +17,16 @@ export function setupWebSocket(server) {
     });
   };
 
-  // Update feeds periodically
   const updateFeeds = async () => {
     try {
-      const recentSummaries = await db
-        .select()
-        .from(summaries)
-        .orderBy(summaries.createdAt)
-        .limit(50);
+      const db = await connectToMongo();
+      const collection = db.collection('summaries');
+
+      const recentSummaries = await collection
+        .find({})
+        .sort({ createdAt: -1 }) // newest first
+        .limit(50)
+        .toArray();
 
       broadcast('feedUpdate', recentSummaries);
     } catch (error) {
@@ -33,17 +34,11 @@ export function setupWebSocket(server) {
     }
   };
 
-  // Start periodic updates
   const updateInterval = setInterval(updateFeeds, 5000);
 
   wss.on('connection', (ws) => {
     clients.add(ws);
     console.log('Client connected, total clients:', clients.size);
-
-    // Send initial data
-    if (feeds.size > 0) {
-      ws.send(JSON.stringify({ type: 'initialFeeds', data: Array.from(feeds.values()).flat() }));
-    }
 
     ws.on('message', async (message) => {
       try {
@@ -74,7 +69,6 @@ export function setupWebSocket(server) {
     });
   });
 
-  // Cleanup on server shutdown
   return () => {
     clearInterval(updateInterval);
     clients.forEach(client => client.close());

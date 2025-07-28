@@ -1,21 +1,30 @@
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
-import * as schema from './schema.js';
+import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { Summary } from './models/Summary.js';
 
 dotenv.config();
 
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-export const db = drizzle(pool, { schema });
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/intelverse';
+
+export async function connectDB() {
+  try {
+    await mongoose.connect(MONGODB_URI);
+    console.log('✅ MongoDB connected');
+  } catch (err) {
+    console.error('❌ MongoDB connection error:', err);
+    process.exit(1);
+  }
+}
 
 export async function saveSummary(summaryObj) {
-  return await db.insert(schema.summaries).values(summaryObj);
+  const summary = new Summary(summaryObj);
+  return await summary.save();
 }
 
 export async function getRecentSummaries(limit = 10) {
-  return await db.select().from(schema.summaries).limit(limit);
+  return await Summary.find().sort({ createdAt: -1 }).limit(limit);
 }
 
 export async function getSummaryByUrl(url) {
-  return await db.select().from(schema.summaries).where(sql`url = ${url}`).limit(1);
+  return await Summary.findOne({ url });
 }

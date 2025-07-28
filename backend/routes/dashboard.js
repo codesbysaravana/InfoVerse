@@ -1,12 +1,22 @@
 import express from 'express';
-import { db } from '../drizzle/db.js';
-import { summaries } from '../drizzle/schema.js';
+import mongoose from 'mongoose';
 
 const router = express.Router();
 
+// Define MongoDB Schema for summaries if not already defined
+const summarySchema = new mongoose.Schema({
+  title: String,
+  url: String,
+  summary: String,
+  source: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Summary = mongoose.model('Summary', summarySchema);
+
 router.get('/', async (req, res) => {
   try {
-    const data = await db.select().from(summaries).orderBy(summaries.createdAt);
+    const data = await Summary.find().sort({ createdAt: 1 });
     res.json({ summaries: data });
   } catch (error) {
     console.error('Dashboard error:', error);
@@ -18,11 +28,9 @@ router.get('/', async (req, res) => {
 router.get('/trends', async (req, res) => {
   try {
     const last24Hours = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const recentSummaries = await db
-      .select()
-      .from(summaries)
-      .where(summaries.createdAt, '>=', last24Hours)
-      .orderBy(summaries.createdAt);
+    const recentSummaries = await Summary.find({
+      createdAt: { $gte: last24Hours }
+    }).sort({ createdAt: 1 });
     
     res.json({ trends: recentSummaries });
   } catch (error) {
@@ -34,13 +42,21 @@ router.get('/trends', async (req, res) => {
 // Get source statistics
 router.get('/stats', async (req, res) => {
   try {
-    const stats = await db
-      .select({
-        source: summaries.source,
-        count: sql`count(*)::integer`
-      })
-      .from(summaries)
-      .groupBy(summaries.source);
+    const stats = await Summary.aggregate([
+      {
+        $group: {
+          _id: '$source',
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          source: '$_id',
+          count: 1,
+          _id: 0
+        }
+      }
+    ]);
     
     res.json({ stats });
   } catch (error) {

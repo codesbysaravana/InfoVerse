@@ -1,10 +1,29 @@
 import express from 'express';
-import { db } from '../drizzle/db.js';
-import { summaries } from '../drizzle/schema.js';
 import { generateResponse, generateStreamingResponse } from '../utils/gemini.js';
+import mongoose from 'mongoose';
 
 const router = express.Router();
-const messageHistory = new Map(); // In-memory storage for chat history
+
+// Define MongoDB Schema for chat messages
+const messageSchema = new mongoose.Schema({
+  sessionId: String,
+  messages: [{
+    role: String,
+    content: String,
+    timestamp: { type: Date, default: Date.now }
+  }]
+});
+
+const summarySchema = new mongoose.Schema({
+  title: String,
+  url: String,
+  summary: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+// Create MongoDB models
+const ChatSession = mongoose.model('ChatSession', messageSchema);
+const Summary = mongoose.model('Summary', summarySchema);
 
 // Streaming chat endpoint with RAG implementation
 router.post('/stream', async (req, res) => {
@@ -19,16 +38,20 @@ router.post('/stream', async (req, res) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
-    // Get relevant summaries for context
-    const relevantSummaries = await db
-      .select()
-      .from(summaries)
-      .where(summaries.summary, 'like', `%${query}%`)
-      .limit(3);
+    // Get relevant summaries from MongoDB
+    const relevantSummaries = await Summary.find(
+      { summary: { $regex: query, $options: 'i' } },
+      null,
+      { limit: 3 }
+    );
 
-    // Get chat history for context
-    const history = messageHistory.get(sessionId) || [];
-    const contextMessages = history.slice(-5); // Last 5 messages for context
+    // Get chat history from MongoDB
+    let session = await ChatSession.findOne({ sessionId });
+    if (!session) {
+      session = new ChatSession({ sessionId, messages: [] });
+    }
+    
+    const contextMessages = session.messages.slice(-5); // Last 5 messages for context
 
     // Prepare context for Gemini
     const context = [
@@ -62,20 +85,25 @@ router.post('/stream', async (req, res) => {
       res.write(`data: ${data}\n\n`);
     }
 
-    // Store in history after complete response
-    const newMessage = {
+    // Store messages in MongoDB
+    const userMessage = {
+      role: 'user',
+      content: query,
+      timestamp: new Date()
+    };
+
+    const assistantMessage = {
       role: 'assistant',
       content: fullResponse,
-      timestamp: new Date().toISOString()
+      timestamp: new Date()
     };
-    
-    if (!messageHistory.has(sessionId)) {
-      messageHistory.set(sessionId, []);
+
+    if (!session) {
+      session = new ChatSession({ sessionId, messages: [] });
     }
-    messageHistory.get(sessionId).push(
-      { role: 'user', content: query, timestamp: new Date().toISOString() },
-      newMessage
-    );
+    
+    session.messages.push(userMessage, assistantMessage);
+    await session.save();
 
     // Send final done event
     res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
@@ -99,16 +127,20 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Query is required' });
     }
 
-    // Get relevant summaries for context
-    const relevantSummaries = await db
-      .select()
-      .from(summaries)
-      .where(summaries.summary, 'like', `%${query}%`)
-      .limit(3);
+    // Get relevant summaries from MongoDB
+    const relevantSummaries = await Summary.find(
+      { summary: { $regex: query, $options: 'i' } },
+      null,
+      { limit: 3 }
+    );
 
-    // Get chat history for context
-    const history = messageHistory.get(sessionId) || [];
-    const contextMessages = history.slice(-5); // Last 5 messages for context
+    // Get chat history from MongoDB
+    let session = await ChatSession.findOne({ sessionId });
+    if (!session) {
+      session = new ChatSession({ sessionId, messages: [] });
+    }
+    
+    const contextMessages = session.messages.slice(-5); // Last 5 messages for context
 
     // Prepare context for Gemini
     const context = [
@@ -119,20 +151,25 @@ router.post('/', async (req, res) => {
     // Generate response using Gemini
     const answer = await generateResponse(query, context);
 
-    // Store in history
-    const newMessage = {
+    // Store messages in MongoDB
+    const userMessage = {
+      role: 'user',
+      content: query,
+      timestamp: new Date()
+    };
+
+    const assistantMessage = {
       role: 'assistant',
       content: answer,
-      timestamp: new Date().toISOString()
+      timestamp: new Date()
     };
-    
-    if (!messageHistory.has(sessionId)) {
-      messageHistory.set(sessionId, []);
+
+    if (!session) {
+      session = new ChatSession({ sessionId, messages: [] });
     }
-    messageHistory.get(sessionId).push(
-      { role: 'user', content: query, timestamp: new Date().toISOString() },
-      newMessage
-    );
+    
+    session.messages.push(userMessage, assistantMessage);
+    await session.save();
 
     res.json({
       answer,
@@ -152,8 +189,8 @@ router.post('/', async (req, res) => {
 router.get('/history', async (req, res) => {
   try {
     const { sessionId = 'default' } = req.query;
-    const history = messageHistory.get(sessionId) || [];
-    res.json({ history });
+    const session = await ChatSession.findOne({ sessionId });
+    res.json({ history: session ? session.messages : [] });
   } catch (error) {
     console.error('History error:', error);
     res.status(500).json({ error: 'Failed to fetch chat history' });
